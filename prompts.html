@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Maintenance Minder — the prompts</title>
+<style>
+ body{margin:0;font:15px/1.55 "Segoe UI",system-ui,sans-serif;color:#20262b;background:#fbfaf6}
+ header{padding:24px 28px 12px;border-bottom:3px solid #b23a2e}
+ h1{margin:0;font-size:24px} main{max-width:900px;margin:0 auto;padding:18px 28px 60px}
+ .p{background:#fff;border:1px solid #d9d4c8;border-radius:8px;margin:18px 0;padding:14px 16px}
+ .p h2{margin:0 0 8px;font-size:16px;display:flex;justify-content:space-between;align-items:center}
+ pre{white-space:pre-wrap;font:13px/1.5 ui-monospace,Menlo,Consolas,monospace;margin:0}
+ button{background:#4a6b8a;color:#fff;border:0;border-radius:6px;padding:6px 12px;font:600 13px inherit;cursor:pointer}
+ a{color:#b23a2e}
+</style>
+</head>
+<body>
+<header><h1>The Maintenance Minder — the three prompts</h1>
+<p>Exactly as typed in the episode. Paste them into your AI of choice, in order. The tool itself is <a href="index.html">here</a>; the full bundle is <a href="Maintenance_Minder_BUNDLE.zip">this zip</a>.</p></header>
+<main id="m"></main>
+<script>
+const prompts = [
+["Prompt 1 — the first ask","Here are three files from my shop. Assets: Asset, Name, Unit (miles, hours, or none), Current Meter, Meter Date, In Service, Meter At Start. Service rules: Asset, Task, Every Days, Every Meter. Service history: Date, Asset, Task, Meter, Cost, Notes. Build me a single HTML file where I paste all three and it shows a service board — what is overdue, what is coming due, and what maintenance has cost me this year per machine. No server, nothing leaves the page."],
+["Prompt 2 — the real rules","The board is wrong about the machines we actually use. The rules are not suggestions — implement them exactly:\n- A rule with Every Days AND Every Meter means WHICHEVER COMES FIRST: the day count since the last service, or the meter interval past the meter at the last service. Either one by itself makes the service due.\n- \"Due soon\" has to come from how hard each machine is being used RIGHT NOW: project meter-based services from the machine's recent usage (a settings window, default the last 90 days of readings), not from its lifetime average and not from the calendar.\n- A service logged without a meter reading still counts as a service — the meter cell is optional, it is not zero.\n- A machine with no history for a rule is not fine — count from its in-service date and say so on the board."],
+["Prompt 3 — refuse to guess","Now make it refuse to guess. Anything you cannot read, refuse out loud, row by row, with the row number and the reason: a date that is not a real date, an amount that is not money, an asset that is not in my asset list, a meter reading that goes backwards in time. Park exact duplicate rows and count them once, visibly. Never read the computer's clock — the board is \"as of\" a typed date in settings. Split every machine's spend into planned service versus unscheduled repairs for a typed cost year. Then audit yourself: every history row lands in exactly one bucket (preventive + unscheduled + duplicates + refused = rows in), the money re-adds to the cent, and refusals stay under five percent of the file — if any of that fails, print DO NOT TRUST THIS SERVICE BOARD across the top."]
+];
+const m = document.getElementById("m");
+prompts.forEach(([t, body]) => {
+  const d = document.createElement("div"); d.className = "p";
+  const h = document.createElement("h2"); h.textContent = t;
+  const b = document.createElement("button"); b.textContent = "Copy";
+  b.onclick = () => { navigator.clipboard.writeText(body); b.textContent = "Copied"; setTimeout(() => b.textContent = "Copy", 1200); };
+  h.appendChild(b); d.appendChild(h);
+  const pre = document.createElement("pre"); pre.textContent = body; d.appendChild(pre);
+  m.appendChild(d);
+});
+</script>
+</body>
+</html>

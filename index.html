@@ -1,0 +1,401 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Maintenance Minder — free vehicle &amp; equipment service board</title>
+<style>
+  :root { --ink:#20262b; --paper:#fbfaf6; --line:#d9d4c8; --red:#9d2f22; --amber:#9a6a0b; --gold:#7c5e10; --green:#2f6b43; --accent:#b23a2e; --slate:#4a6b8a; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:15px/1.5 "Segoe UI", system-ui, sans-serif; color:var(--ink); background:var(--paper); }
+  header { padding:26px 28px 14px; border-bottom:3px solid var(--accent); }
+  header h1 { margin:0 0 4px; font-size:26px; }
+  header p { margin:0; color:#5a5f54; max-width:70ch; }
+  main { padding:20px 28px 60px; max-width:1180px; margin:0 auto; }
+  .inputs { display:grid; grid-template-columns:1fr 1fr 1fr; gap:14px; }
+  .inputs label { font-weight:600; display:block; margin-bottom:4px; }
+  textarea { width:100%; height:150px; font:12px/1.4 ui-monospace, Menlo, Consolas, monospace; border:1px solid var(--line); border-radius:6px; padding:8px; background:#fff; }
+  .settings { display:flex; flex-wrap:wrap; gap:16px; align-items:end; margin:16px 0; }
+  .settings label { font-size:13px; font-weight:600; display:block; }
+  .settings input { width:130px; padding:6px 8px; border:1px solid var(--line); border-radius:6px; font:14px inherit; }
+  button { background:var(--accent); color:#fff; border:0; border-radius:6px; padding:10px 18px; font:600 15px inherit; cursor:pointer; }
+  button.ghost { background:var(--slate); }
+  #banner { display:none; background:var(--red); color:#fff; font-weight:700; padding:12px 16px; border-radius:6px; margin:14px 0; font-size:17px; }
+  table { border-collapse:collapse; width:100%; margin:10px 0 22px; background:#fff; border:1px solid var(--line); }
+  th, td { text-align:left; padding:7px 10px; border-bottom:1px solid var(--line); font-size:14px; }
+  th { background:#efece3; font-size:12.5px; text-transform:uppercase; letter-spacing:.04em; }
+  .chip { display:inline-block; padding:2px 9px; border-radius:11px; color:#fff; font-size:12.5px; font-weight:700; white-space:nowrap; }
+  .c-OVERDUE { background:var(--red); } .c-NEEDS { background:var(--amber); } .c-DUE { background:var(--gold); } .c-OK { background:var(--green); }
+  h2 { font-size:18px; margin:26px 0 6px; }
+  .note { color:#5a5f54; font-size:13px; }
+  #recon { margin-top:26px; padding:12px 16px; background:#efece3; border-radius:6px; font-size:14px; }
+  footer { padding:18px 28px 40px; color:#6a6f63; font-size:13px; }
+  .num { font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+<header>
+  <h1>The Maintenance Minder</h1>
+  <p>Paste your asset list, your service rules, and your service history. The board tells you what is overdue,
+     what is due soon at the rate you are actually using each machine, what it refuses to guess about, and what
+     breakdowns cost you against planned service. Everything runs on this page — it sends nothing anywhere.</p>
+</header>
+<main>
+  <div class="inputs">
+    <div><label for="assets">Assets</label><textarea id="assets" spellcheck="false"></textarea></div>
+    <div><label for="schedule">Service rules</label><textarea id="schedule" spellcheck="false"></textarea></div>
+    <div><label for="history">Service history</label><textarea id="history" spellcheck="false"></textarea></div>
+  </div>
+  <div class="settings">
+    <div><label for="asof">Board as of (typed, never the clock)</label><input id="asof" value="2026-11-09"></div>
+    <div><label for="duesoon">Due-soon horizon (days)</label><input id="duesoon" value="14"></div>
+    <div><label for="window">Usage window (days)</label><input id="window" value="90"></div>
+    <div><label for="costyear">Cost year</label><input id="costyear" value="2026"></div>
+    <button id="run">Build the board</button>
+    <button id="sample" class="ghost">Load the sample fleet</button>
+  </div>
+  <div id="banner">DO NOT TRUST THIS SERVICE BOARD</div>
+  <div id="out" hidden>
+    <h2>Service board</h2>
+    <table id="board"><thead><tr><th>Asset</th><th>Task</th><th>Status</th><th>Last done</th><th>Due</th><th>What's left</th></tr></thead><tbody></tbody></table>
+    <h2>The money (<span id="yearlabel"></span>)</h2>
+    <table id="money"><thead><tr><th>Asset</th><th>Planned service</th><th>Breakdowns &amp; repairs</th><th>Total</th></tr></thead><tbody></tbody></table>
+    <p class="note" id="moneyline"></p>
+    <h2>Unscheduled repairs</h2>
+    <table id="repairs"><thead><tr><th>Date</th><th>Asset</th><th>What</th><th>Cost</th></tr></thead><tbody></tbody></table>
+    <h2>Refused rows</h2>
+    <table id="refused"><thead><tr><th>Row</th><th>Why</th></tr></thead><tbody></tbody></table>
+    <p class="note" id="dupline"></p>
+    <div id="recon"></div>
+  </div>
+</main>
+<footer>Free from “Build It With AI.” Sample data is fictional (@example.com). This page makes no network requests and stores nothing.</footer>
+<script>/* EP26 — The Maintenance Minder — shipped engine (implements SPEC.md exactly).
+   Works in the browser and under node (module.exports). No network, no storage. */
+(function (root) {
+  "use strict";
+
+  function epochDays(iso) { // "YYYY-MM-DD" -> integer days since epoch (UTC)
+    var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso || "");
+    if (!m) return null;
+    var y = +m[1], mo = +m[2], d = +m[3];
+    if (y < 2000 || y > 2099 || mo < 1 || mo > 12 || d < 1 || d > 31) return null;
+    var t = Date.UTC(y, mo - 1, d);
+    var dt = new Date(t);
+    if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== mo - 1 || dt.getUTCDate() !== d) return null;
+    return Math.floor(t / 86400000);
+  }
+  function addDays(days, n) {
+    var dt = new Date((days + n) * 86400000);
+    function p(x) { return (x < 10 ? "0" : "") + x; }
+    return dt.getUTCFullYear() + "-" + p(dt.getUTCMonth() + 1) + "-" + p(dt.getUTCDate());
+  }
+  function ceilDiv(a, b) { return Math.floor((a + b - 1) / b); }
+  function parseCents(raw) { // "1,218.40" -> 121840 ; "" -> 0 ; bad -> null
+    var s = (raw || "").trim().replace(/\$/g, "").replace(/,/g, "");
+    if (s === "") return 0;
+    if (!/^\d+(\.\d{1,2})?$/.test(s)) return null;
+    var parts = s.split(".");
+    var cents = parseInt(parts[0], 10) * 100;
+    if (parts.length === 2) cents += parseInt((parts[1] + "00").slice(0, 2), 10);
+    return cents;
+  }
+  function parseMeter(raw) { // "" -> blank(null-ok) ; integer >=0 ; bad -> undefined
+    var s = (raw || "").trim().replace(/,/g, "");
+    if (s === "") return null;
+    if (!/^\d+$/.test(s)) return undefined;
+    return parseInt(s, 10);
+  }
+  function parseCSV(text) { // minimal CSV: quotes, commas; returns array of arrays
+    var rows = [], row = [], cur = "", q = false, i, c;
+    text = (text || "").replace(/\r\n?/g, "\n");
+    for (i = 0; i < text.length; i++) {
+      c = text[i];
+      if (q) { if (c === '"') { if (text[i + 1] === '"') { cur += '"'; i++; } else q = false; } else cur += c; }
+      else if (c === '"') q = true;
+      else if (c === ",") { row.push(cur); cur = ""; }
+      else if (c === "\n") { row.push(cur); rows.push(row); row = []; cur = ""; }
+      else cur += c;
+    }
+    if (cur !== "" || row.length) { row.push(cur); rows.push(row); }
+    return rows.filter(function (r) { return r.some(function (x) { return (x || "").trim() !== ""; }); });
+  }
+  function headerMap(cells, names) { // case-insensitive header lookup
+    var map = {};
+    cells.forEach(function (h, i) { map[(h || "").trim().toLowerCase()] = i; });
+    var out = {};
+    for (var k in names) out[k] = map.hasOwnProperty(names[k]) ? map[names[k]] : -1;
+    return out;
+  }
+
+  function run(assetsText, scheduleText, historyText, settings) {
+    settings = settings || {};
+    var asOfIso = settings.asOf || "2026-11-09";
+    var dueSoonDays = settings.dueSoonDays != null ? +settings.dueSoonDays : 14;
+    var rateWindowDays = settings.rateWindowDays != null ? +settings.rateWindowDays : 90;
+    var costYear = settings.costYear != null ? +settings.costYear : 2026;
+    var asOf = epochDays(asOfIso);
+    var configRefusals = [];
+    if (asOf === null) configRefusals.push('settings: bad asOf "' + asOfIso + '"');
+
+    // ---- assets
+    var aRows = parseCSV(assetsText);
+    var ah = headerMap(aRows[0] || [], { id: "asset", name: "name", unit: "unit", cm: "current meter", md: "meter date", insvc: "in service", mas: "meter at start" });
+    var assets = {}, assetOrder = [];
+    for (var i = 1; i < aRows.length; i++) {
+      var r = aRows[i];
+      var id = (r[ah.id] || "").trim();
+      if (!id) { configRefusals.push("asset row " + i + ": missing id"); continue; }
+      var unit = (r[ah.unit] || "").trim().toLowerCase();
+      if (unit !== "miles" && unit !== "hours" && unit !== "none") { configRefusals.push("asset row " + i + ': bad unit "' + (r[ah.unit] || "").trim() + '"'); continue; }
+      var insvc = epochDays((r[ah.insvc] || "").trim());
+      if (insvc === null) { configRefusals.push("asset row " + i + ': bad in-service date "' + (r[ah.insvc] || "").trim() + '"'); continue; }
+      var cm = null, md = null, mas = null;
+      if (unit !== "none") {
+        cm = parseMeter(r[ah.cm]);
+        md = epochDays((r[ah.md] || "").trim());
+        mas = parseMeter(r[ah.mas]); if (mas === null) mas = 0;
+        if (cm === null || cm === undefined || md === null || mas === undefined) { configRefusals.push("asset row " + i + ": bad meter fields"); continue; }
+      }
+      assets[id] = { id: id, name: (r[ah.name] || "").trim(), unit: unit, currentMeter: cm, meterDate: md, inService: insvc, meterAtStart: mas, readings: [] };
+      assetOrder.push(id);
+    }
+
+    // ---- schedule
+    var sRows = parseCSV(scheduleText);
+    var sh = headerMap(sRows[0] || [], { id: "asset", task: "task", ed: "every days", em: "every meter" });
+    var rules = [];
+    for (i = 1; i < sRows.length; i++) {
+      r = sRows[i];
+      id = (r[sh.id] || "").trim();
+      var task = (r[sh.task] || "").trim();
+      if (!assets[id]) { configRefusals.push("schedule row " + i + ': unknown asset "' + id + '"'); continue; }
+      var edRaw = (r[sh.ed] || "").trim(), emRaw = (r[sh.em] || "").trim();
+      var ed = edRaw === "" ? null : (/^\d+$/.test(edRaw) ? +edRaw : undefined);
+      var em = emRaw === "" ? null : (/^\d+$/.test(emRaw) ? +emRaw : undefined);
+      if (ed === undefined || em === undefined || (ed === null && em === null) || ed === 0 || em === 0) { configRefusals.push("schedule row " + i + ": no usable interval"); continue; }
+      if (em !== null && assets[id].unit === "none") { configRefusals.push("schedule row " + i + ": meter interval on a no-meter asset"); continue; }
+      rules.push({ asset: id, task: task, everyDays: ed, everyMeter: em });
+    }
+
+    // ---- history classification
+    var hRows = parseCSV(historyText);
+    var hh = headerMap(hRows[0] || [], { date: "date", id: "asset", task: "task", meter: "meter", cost: "cost", notes: "notes" });
+    var ruleKey = {};
+    rules.forEach(function (ru) { ruleKey[ru.asset + "\u0000" + ru.task] = true; });
+    var counted = [], unscheduled = [], duplicates = [], refused = [];
+    var seen = {}; // dup detection
+    for (i = 1; i < hRows.length; i++) {
+      r = hRows[i];
+      var raw = { row: i, dateRaw: (r[hh.date] || "").trim(), asset: (r[hh.id] || "").trim(), task: (r[hh.task] || "").trim(), meterRaw: (r[hh.meter] || "").trim(), costRaw: (r[hh.cost] || "").trim(), notes: (r[hh.notes] || "").trim() };
+      var d = epochDays(raw.dateRaw);
+      if (d === null) { refused.push({ row: i, reason: 'bad date "' + raw.dateRaw + '"' }); continue; }
+      var cents = parseCents(raw.costRaw);
+      if (cents === null) { refused.push({ row: i, reason: 'bad amount "' + raw.costRaw + '"' }); continue; }
+      var asset = assets[raw.asset];
+      if (!asset) { refused.push({ row: i, reason: 'unknown asset "' + raw.asset + '"' }); continue; }
+      var meter = parseMeter(raw.meterRaw);
+      if (meter === undefined) { refused.push({ row: i, reason: 'bad meter "' + raw.meterRaw + '"' }); continue; }
+      if (meter !== null && asset.unit !== "none") {
+        var bad = null;
+        for (var j = 0; j < asset.readings.length; j++) {
+          var rd = asset.readings[j];
+          if (rd.date <= d && rd.meter > meter) { bad = rd; break; }
+          if (rd.date >= d && rd.meter < meter) { bad = rd; break; }
+        }
+        if (bad) { refused.push({ row: i, reason: "meter goes backwards (" + (bad.date <= d ? meter : bad.meter) + " after " + (bad.date <= d ? bad.meter : meter) + ")" }); continue; }
+      }
+      var key = [raw.dateRaw, raw.asset, raw.task, meter === null ? "" : meter, cents].join("\u0000");
+      if (seen[key]) { duplicates.push(i); continue; }
+      seen[key] = true;
+      var rec = { row: i, date: d, asset: raw.asset, task: raw.task, meter: meter, cents: cents, notes: raw.notes };
+      if (meter !== null && asset.unit !== "none") asset.readings.push({ date: d, meter: meter, row: i });
+      if (ruleKey[raw.asset + "\u0000" + raw.task]) counted.push(rec); else unscheduled.push(rec);
+    }
+
+    // add current-meter reading; sort readings
+    assetOrder.forEach(function (id) {
+      var a = assets[id];
+      if (a.unit !== "none" && a.currentMeter !== null && a.meterDate !== null) a.readings.push({ date: a.meterDate, meter: a.currentMeter, row: -1 });
+      a.readings.sort(function (x, y) { return x.date - y.date || x.meter - y.meter; });
+    });
+
+    // usage rate per asset
+    var rates = {};
+    assetOrder.forEach(function (id) {
+      var a = assets[id];
+      if (a.unit === "none") { rates[id] = null; return; }
+      var lo = asOf - rateWindowDays;
+      var w = a.readings.filter(function (x) { return x.date >= lo && x.date <= asOf; });
+      if (w.length < 2) { rates[id] = null; return; }
+      var delta = w[w.length - 1].meter - w[0].meter, span = w[w.length - 1].date - w[0].date;
+      if (delta <= 0 || span < 1) { rates[id] = null; return; }
+      rates[id] = { delta: delta, span: span };
+    });
+
+    // board
+    var board = rules.map(function (ru) {
+      var a = assets[ru.asset];
+      var best = null;
+      counted.forEach(function (c) {
+        if (c.asset !== ru.asset || c.task !== ru.task) return;
+        if (!best) { best = c; return; }
+        var cm_ = c.meter === null ? -1 : c.meter, bm = best.meter === null ? -1 : best.meter;
+        if (c.date > best.date || (c.date === best.date && (cm_ > bm || (cm_ === bm && c.row > best.row)))) best = c;
+      });
+      var fromInService = !best;
+      var lastDate = best ? best.date : a.inService;
+      var lastMeter, meterBasisEstimated = false;
+      if (a.unit === "none") lastMeter = null;
+      else if (best && best.meter !== null) lastMeter = best.meter;
+      else if (best) { // service logged without a reading
+        meterBasisEstimated = true;
+        var cand = null;
+        a.readings.forEach(function (x) { if (x.date <= lastDate && (cand === null || x.meter > cand)) cand = x.meter; });
+        lastMeter = cand === null ? a.meterAtStart : cand;
+      } else lastMeter = a.meterAtStart;
+
+      var dateDue = ru.everyDays !== null ? lastDate + ru.everyDays : null;
+      var daysToDate = dateDue !== null ? dateDue - asOf : null;
+      var dateOverdue = dateDue !== null && asOf >= dateDue;
+      var meterDue = null, remaining = null, meterOverdue = false;
+      if (ru.everyMeter !== null && a.unit !== "none") {
+        meterDue = lastMeter + ru.everyMeter;
+        remaining = meterDue - a.currentMeter;
+        meterOverdue = a.currentMeter >= meterDue;
+      }
+      var status, projDays = null, daysLeft = null, overdueDays = null, overdueMeter = null;
+      if (dateOverdue || meterOverdue) {
+        status = "OVERDUE";
+        if (dateOverdue) overdueDays = asOf - dateDue;
+        if (meterOverdue) overdueMeter = a.currentMeter - meterDue;
+      } else if (meterDue !== null && !rates[ru.asset]) {
+        status = "NEEDS A METER READING";
+      } else {
+        var opts = [];
+        if (daysToDate !== null) opts.push(daysToDate);
+        if (meterDue !== null) { projDays = ceilDiv(remaining * rates[ru.asset].span, rates[ru.asset].delta); opts.push(projDays); }
+        daysLeft = Math.min.apply(null, opts);
+        status = daysLeft <= dueSoonDays ? "DUE SOON" : "OK";
+      }
+      return { asset: ru.asset, task: ru.task, status: status, fromInService: fromInService, meterBasisEstimated: meterBasisEstimated,
+        lastDate: addDays(lastDate, 0), lastMeter: lastMeter, dateDue: dateDue !== null ? addDays(dateDue, 0) : null,
+        meterDue: meterDue, daysToDate: daysToDate, remaining: remaining, projDays: projDays, daysLeft: daysLeft,
+        overdueDays: overdueDays, overdueMeter: overdueMeter };
+    });
+    var rank = { "OVERDUE": 0, "NEEDS A METER READING": 1, "DUE SOON": 2, "OK": 3 };
+    board.sort(function (x, y) {
+      if (rank[x.status] !== rank[y.status]) return rank[x.status] - rank[y.status];
+      var xa = x.daysLeft === null ? 1e9 : x.daysLeft, ya = y.daysLeft === null ? 1e9 : y.daysLeft;
+      if (xa !== ya) return xa - ya;
+      if (x.asset !== y.asset) return x.asset < y.asset ? -1 : 1;
+      return x.task < y.task ? -1 : (x.task > y.task ? 1 : 0);
+    });
+
+    // money (costYear)
+    function inYear(d) { return addDays(d, 0).slice(0, 4) === String(costYear); }
+    var money = {}, moneyTotal = 0;
+    assetOrder.forEach(function (id) { money[id] = { asset: id, plannedCents: 0, unplannedCents: 0, totalCents: 0 }; });
+    counted.forEach(function (c) { if (inYear(c.date) && money[c.asset]) { money[c.asset].plannedCents += c.cents; } });
+    unscheduled.forEach(function (c) { if (inYear(c.date) && money[c.asset]) { money[c.asset].unplannedCents += c.cents; } });
+    var moneyArr = [];
+    assetOrder.forEach(function (id) {
+      var m = money[id]; m.totalCents = m.plannedCents + m.unplannedCents; moneyTotal += m.totalCents;
+      if (m.totalCents > 0) moneyArr.push(m);
+    });
+    moneyArr.sort(function (x, y) { return y.totalCents - x.totalCents || (x.asset < y.asset ? -1 : 1); });
+
+    // self-audit
+    var totalRows = counted.length + unscheduled.length + duplicates.length + refused.length;
+    var straight = 0;
+    counted.concat(unscheduled).forEach(function (c) { if (inYear(c.date)) straight += c.cents; });
+    var rowsTie = totalRows === (hRows.length - 1);
+    var moneyTie = straight === moneyTotal;
+    var refusalShareOk = refused.length * 100 <= totalRows * 5;
+    var trusted = rowsTie && moneyTie && refusalShareOk && configRefusals.length === 0;
+    var banner = trusted ? null : "DO NOT TRUST THIS SERVICE BOARD";
+
+    return { board: board, rates: rates, money: moneyArr, moneyTotalCents: moneyTotal,
+      counted: counted.length, unscheduled: unscheduled.length, duplicates: duplicates.length,
+      refused: refused, unscheduledRows: unscheduled.map(function (c) { return { row: c.row, asset: c.asset, date: addDays(c.date, 0), costCents: c.cents, notes: c.notes, task: c.task }; }),
+      duplicateRows: duplicates.slice(), configRefusals: configRefusals, totalRows: totalRows,
+      trusted: trusted, banner: banner };
+  }
+
+  var api = { run: run, _epochDays: epochDays, _parseCents: parseCents };
+  if (typeof module !== "undefined" && module.exports) module.exports = api;
+  else root.MinderEngine = api;
+})(typeof self !== "undefined" ? self : this);
+</script>
+<script>
+(function () {
+  "use strict";
+  var SAMPLE = { assets: "Asset,Name,Unit,Current Meter,Meter Date,In Service,Meter At Start\nT-101,Ford F-250 pickup,miles,88140,2026-11-07,2021-04-12,0\nT-102,Box truck,miles,54210,2026-11-06,2022-08-30,0\nT-103,Plow truck,miles,43260,2026-11-08,2023-01-19,0\nM-201,Zero-turn mower,hours,1440,2026-11-05,2023-05-01,0\nM-202,Skid steer,hours,2004,2026-08-20,2022-04-04,0\nM-203,Standby generator,hours,612,2026-11-02,2021-10-15,0\nS-301,Equipment trailer,none,,,2022-03-10,\nS-302,Shop air compressor,hours,310,2026-11-01,2026-02-10,0\n", schedule: "Asset,Task,Every Days,Every Meter\nT-101,Oil & filter,180,5000\nT-101,Tire rotation,,7500\nT-102,Oil & filter,180,5000\nT-103,Oil & filter,180,5000\nT-103,Brake inspection,365,\nM-201,100-hour service,,100\nM-202,250-hour service,,250\nM-203,Generator service,365,50\nS-301,DOT inspection,365,\nS-302,Compressor service,180,500\n", history: "Date,Asset,Task,Meter,Cost,Notes\n2023-11-18,S-301,DOT inspection,,90.00,annual\n2025-01-18,T-102,Oil & filter,36900,84.00,\n2024-11-16,S-301,DOT inspection,,95.00,annual\n2024-11-30,M-203,Generator service,432,198.00,\n2025-01-05,M-203,Generator service,478,205.00,\n2025-02-01,T-103,Oil & filter,25140,80.00,\n2025-02-10,T-101,Oil & filter,45120,82.00,\n2025-03-22,T-102,Oil & filter,38840,84.00,\n2025-03-28,M-201,100-hour service,618,140.00,\n2025-03-30,T-101,Tire rotation,47800,40.00,\n2025-04-28,T-101,Oil & filter,49800,82.00,\n2025-05-14,T-101,Tire rotation,50610,40.00,\n2025-05-20,M-201,100-hour service,718,140.00,\n2025-05-30,T-102,Oil & filter,40690,84.00,\n2025-06-10,M-202,250-hour service,1405,155.00,\n2025-06-17,T-103,Oil & filter,29480,84.00,\n2025-07-08,M-201,100-hour service,818,140.00,\n2025-07-19,T-101,Oil & filter,54490,82.00,\n2025-08-02,T-101,Wiper motor,55730,148.20,quit mid-storm\n2025-08-15,T-102,Oil & filter,42760,84.00,\n2025-08-26,M-201,100-hour service,918,148.25,\n2025-08-30,T-103,Oil & filter,31200,84.00,\n2025-09-03,T-102,Lift gate adjust,43310,95.00,sagging\n2025-09-12,T-101,Tire rotation,57600,40.00,\n2025-10-06,T-101,Oil & filter,59290,86.40,\n2025-10-11,T-103,Oil & filter,32990,86.40,\n2025-10-21,M-201,100-hour service,1012,148.25,\n2025-11-20,S-301,DOT inspection,,95.00,annual\n2025-11-21,M-202,250-hour service,1612,162.75,\n2025-11-28,M-203,Generator service,540,212.40,oil + plugs\n2025-12-04,T-103,Brake inspection,36100,140.00,pads at 60%\n2025-12-08,T-103,Plow mount install,36300,260.00,season prep\n2025-12-18,T-101,Oil & filter,62980,86.40,\n2025-12-30,M-201,Winter storage prep,1012,45.00,fuel stabilizer\n2026-01-22,T-101,Oil & filter,64830,86.40,\n2026-02-14,M-202,250-hour service,1655,162.75,\n2026-03-18,T-101,Oil & filter,69570,86.40,\n2026-03-30,T-103,Oil & filter,36890,86.40,\n2026-04-11,T-102,Oil & filter,46920,88.70,\n2026-05-02,T-101,Tire rotation,71890,40.00,\n2026-05-12,M-201,100-hour service,1068,148.25,\n2026-05-29,T-101,Oil & filter,74480,92.15,\n2026-06-08,M-202,Grease and inspect,1790,paid in trade,swapped for mulch delivery\n2026-06-20,T-101,Brake caliper seized,76210,684.75,stuck on route 9\n2026-06-27,T-102,Mirror replacement,49210,87.25,clipped a branch\n2026-07-03,M-201,100-hour service,1168,148.25,\n2026-07-29,M-202,250-hour service,1890,162.75,\n2026-08-14,T-101,Oil & filter,79040,92.15,\n2026-08-19,M-201,100-hour service,1268,156.90,\n2026-09-20,T-103,Oil & filter,38900,86.40,\n2026-09-26,T-101,Alternator + tow,82990,1218.40,died on route 9 again\n2026-10-02,T-102,Oil & filter,51600,88.70,\n2026-10-07,M-202,Drive belt replacement,,618.90,belt shredded; hours not written down\n2026-10-18,T-102,Lift gate motor,52840,512.30,gate stuck down\n2026-10-18,M-201,100-hour service,1368,156.90,\n2026-10-18,M-201,100-hour service,1368,156.90,\n2026-10-20,T-101,Tire rotation,86300,40.00,\n2026-10-25,T-103,Hydraulic hose,41020,393.80,plow line burst\n2026-10-27,T-102,Oil & filter,51060,88.70,entered from a smudged ticket\n2026-10-29,M-203,Transfer switch repair,598,345.60,failed weekly self-test\n2026-11-02,M-201,Blade sharpen,1431,36.00,leaf season set\n2026-13-02,M-201,100-hour service,1395,148.25,\n" };
+  function $(id) { return document.getElementById(id); }
+  function money(c) { return "$" + (c / 100).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+  function chip(st) {
+    var cls = st === "OVERDUE" ? "c-OVERDUE" : st === "NEEDS A METER READING" ? "c-NEEDS" : st === "DUE SOON" ? "c-DUE" : "c-OK";
+    return '<span class="chip ' + cls + '">' + st + "</span>";
+  }
+  function esc(s) { return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]; }); }
+  function leftText(b) {
+    if (b.status === "OVERDUE") {
+      var bits = [];
+      if (b.overdueMeter != null) bits.push(b.overdueMeter.toLocaleString("en-US") + " past the meter");
+      if (b.overdueDays != null) bits.push(b.overdueDays + " days past the date");
+      return bits.join(" · ");
+    }
+    if (b.status === "NEEDS A METER READING") return "no recent reading — go read the meter";
+    var t = b.daysLeft + " days";
+    if (b.projDays != null && b.daysLeft === b.projDays) t += " at current usage";
+    return t;
+  }
+  function render(r) {
+    $("out").hidden = false;
+    $("banner").style.display = r.banner ? "block" : "none";
+    var tb = $("board").tBodies[0]; tb.innerHTML = "";
+    r.board.forEach(function (b) {
+      var last = esc(b.lastDate) + (b.lastMeter != null ? " @ " + b.lastMeter.toLocaleString("en-US") : "") + (b.fromInService ? " (never logged — counting from in-service)" : "");
+      var due = [];
+      if (b.dateDue) due.push(esc(b.dateDue));
+      if (b.meterDue != null) due.push(b.meterDue.toLocaleString("en-US"));
+      tb.insertAdjacentHTML("beforeend", "<tr><td>" + esc(b.asset) + "</td><td>" + esc(b.task) + "</td><td>" + chip(b.status) + "</td><td class=num>" + last + "</td><td class=num>" + due.join(" / ") + "</td><td class=num>" + esc(leftText(b)) + "</td></tr>");
+    });
+    $("yearlabel").textContent = $("costyear").value;
+    var mb = $("money").tBodies[0]; mb.innerHTML = "";
+    var planned = 0, unplanned = 0;
+    r.money.forEach(function (m) {
+      planned += m.plannedCents; unplanned += m.unplannedCents;
+      mb.insertAdjacentHTML("beforeend", "<tr><td>" + esc(m.asset) + "</td><td class=num>" + money(m.plannedCents) + "</td><td class=num>" + money(m.unplannedCents) + "</td><td class=num><b>" + money(m.totalCents) + "</b></td></tr>");
+    });
+    mb.insertAdjacentHTML("beforeend", "<tr><td><b>Total</b></td><td class=num><b>" + money(planned) + "</b></td><td class=num><b>" + money(unplanned) + "</b></td><td class=num><b>" + money(r.moneyTotalCents) + "</b></td></tr>");
+    $("moneyline").textContent = r.moneyTotalCents > 0 ? (Math.round(unplanned * 1000 / r.moneyTotalCents) / 10) + "% of this year's spend was breakdowns, not planned service." : "";
+    var rb = $("repairs").tBodies[0]; rb.innerHTML = "";
+    r.unscheduledRows.forEach(function (u) {
+      rb.insertAdjacentHTML("beforeend", "<tr><td class=num>" + esc(u.date) + "</td><td>" + esc(u.asset) + "</td><td>" + esc(u.task) + (u.notes ? " — " + esc(u.notes) : "") + "</td><td class=num>" + money(u.costCents) + "</td></tr>");
+    });
+    var fb = $("refused").tBodies[0]; fb.innerHTML = "";
+    if (!r.refused.length) fb.insertAdjacentHTML("beforeend", "<tr><td colspan=2>None.</td></tr>");
+    r.refused.forEach(function (f) {
+      fb.insertAdjacentHTML("beforeend", "<tr><td class=num>" + f.row + "</td><td>" + esc(f.reason) + "</td></tr>");
+    });
+    r.configRefusals.forEach(function (f) {
+      fb.insertAdjacentHTML("beforeend", "<tr><td>setup</td><td>" + esc(f) + "</td></tr>");
+    });
+    $("dupline").textContent = r.duplicates ? r.duplicates + " exact duplicate row" + (r.duplicates > 1 ? "s" : "") + " parked and counted once." : "";
+    $("recon").innerHTML = "<b>Reconciliation:</b> " + r.totalRows + " history rows in = " + r.counted + " preventive + " + r.unscheduled + " unscheduled + " + r.duplicates + " duplicate + " + r.refused.length + " refused" + (r.trusted ? " — ties." : " — DOES NOT TIE.");
+  }
+  function runNow() {
+    var settings = { asOf: $("asof").value.trim(), dueSoonDays: +$("duesoon").value, rateWindowDays: +$("window").value, costYear: +$("costyear").value };
+    render(MinderEngine.run($("assets").value, $("schedule").value, $("history").value, settings));
+  }
+  $("run").addEventListener("click", runNow);
+  $("sample").addEventListener("click", function () {
+    $("assets").value = SAMPLE.assets; $("schedule").value = SAMPLE.schedule; $("history").value = SAMPLE.history;
+    $("asof").value = "2026-11-09"; $("duesoon").value = "14"; $("window").value = "90"; $("costyear").value = "2026";
+    runNow();
+  });
+})();
+</script>
+</body>
+</html>
